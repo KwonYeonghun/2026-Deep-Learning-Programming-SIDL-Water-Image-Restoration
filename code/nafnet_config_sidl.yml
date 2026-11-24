@@ -1,0 +1,111 @@
+# NAFNet config for SIDL — Colab 환경 기준
+# 사용: NAFNet repo의 options/train/ 아래에 복사
+# 학습 명령: python -m torch.distributed.launch --nproc_per_node=1 \
+#           basicsr/train.py -opt options/train/SIDL.yml --launcher pytorch
+
+# ─── general ───
+name: NAFNet-SIDL-w32
+model_type: ImageRestorationModel
+scale: 1
+num_gpu: 1
+manual_seed: 42
+
+# ─── dataset ───
+datasets:
+  train:
+    name: SIDL-train
+    type: PairedImageDataset
+    dataroot_gt: /content/drive/MyDrive/SIDL/data/train_patches/gt
+    dataroot_lq: /content/drive/MyDrive/SIDL/data/train_patches/input
+    filename_tmpl: '{}'
+    io_backend:
+      type: disk
+
+    gt_size: 256             # patch 크기. T4 16GB / 5060Ti 16GB 둘 다 256 권장
+    use_flip: true
+    use_rot: true
+
+    use_shuffle: true
+    num_worker_per_gpu: 4    # Colab은 4면 충분
+    batch_size_per_gpu: 8    # OOM 시 4 → 2 순으로 줄이기
+    dataset_enlarge_ratio: 1
+    prefetch_mode: ~
+
+  val:
+    name: SIDL-val
+    type: PairedImageDataset
+    dataroot_gt: /content/drive/MyDrive/SIDL/data/val_patches/gt
+    dataroot_lq: /content/drive/MyDrive/SIDL/data/val_patches/input
+    io_backend:
+      type: disk
+
+# ─── network ───
+network_g:
+  type: NAFNetLocal
+  width: 32                 # 빠른 시작용. 시간되면 64로 (OOM 주의)
+  enc_blk_nums: [2, 2, 4, 8]
+  middle_blk_num: 12
+  dec_blk_nums: [2, 2, 2, 2]
+
+# ─── path ───
+path:
+  pretrain_network_g: ~     # 처음부터 학습
+  strict_load_g: true
+  resume_state: ~           # resume 시 .state 파일 절대경로 입력
+  experiments_root: /content/drive/MyDrive/SIDL/checkpoints
+  models: /content/drive/MyDrive/SIDL/checkpoints/models
+  training_states: /content/drive/MyDrive/SIDL/checkpoints/training_states
+  log: /content/drive/MyDrive/SIDL/checkpoints/log
+  visualization: /content/drive/MyDrive/SIDL/checkpoints/visualization
+
+# ─── training ───
+train:
+  optim_g:
+    type: AdamW
+    lr: !!float 1e-3
+    weight_decay: !!float 1e-3
+    betas: [0.9, 0.9]
+
+  scheduler:
+    type: TrueCosineAnnealingLR
+    T_max: 200000
+    eta_min: !!float 1e-7
+
+  total_iter: 200000
+  warmup_iter: -1
+
+  # NAFNet 권장 — PSNRLoss는 직접 PSNR을 최적화
+  pixel_opt:
+    type: PSNRLoss
+    loss_weight: 1
+    reduction: mean
+
+# ─── validation ───
+val:
+  val_freq: !!float 5e3      # 5000 iter마다 평가
+  save_img: false
+  use_image: false
+
+  metrics:
+    psnr:
+      type: calculate_psnr
+      crop_border: 0
+      test_y_channel: false
+    ssim:
+      type: calculate_ssim
+      crop_border: 0
+      test_y_channel: false
+
+# ─── logging ───
+logger:
+  print_freq: 200
+  save_checkpoint_freq: !!float 5e3   # 5000 iter마다 ckpt 저장 → Colab 끊김 대비
+  use_tb_logger: true
+  wandb:
+    project: ~                # 사용시 'sidl-nafnet' 등 입력
+    resume_id: ~
+
+# ─── distributed ───
+dist_params:
+  backend: nccl
+  port: 29500
